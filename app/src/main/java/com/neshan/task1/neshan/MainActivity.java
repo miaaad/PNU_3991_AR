@@ -2,17 +2,24 @@ package com.neshan.task1.neshan;
 
 import androidx.annotation.NonNull;
 import androidx.coordinatorlayout.widget.CoordinatorLayout;
+import androidx.core.content.ContextCompat;
+import androidx.core.graphics.drawable.DrawableCompat;
 import androidx.lifecycle.ViewModelProvider;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
 import android.Manifest;
+import android.animation.ValueAnimator;
 import android.annotation.SuppressLint;
 import android.app.Activity;
+import android.content.Context;
 import android.content.Intent;
 import android.content.IntentSender;
 import android.content.pm.PackageManager;
+import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.graphics.Canvas;
+import android.graphics.drawable.Drawable;
 import android.location.Location;
 import android.net.Uri;
 import android.os.Build;
@@ -23,14 +30,13 @@ import android.provider.Settings;
 import android.text.Editable;
 import android.text.TextWatcher;
 import android.util.Log;
-import android.view.KeyEvent;
 import android.view.View;
+import android.view.animation.LinearInterpolator;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
-import android.widget.TextView;
 import android.widget.Toast;
 
 import com.carto.graphics.Color;
@@ -53,10 +59,12 @@ import com.google.android.gms.location.LocationSettingsRequest;
 import com.google.android.gms.location.LocationSettingsResponse;
 import com.google.android.gms.location.LocationSettingsStatusCodes;
 import com.google.android.gms.location.SettingsClient;
+import com.google.android.gms.maps.Projection;
 import com.google.android.gms.tasks.OnCompleteListener;
 import com.google.android.gms.tasks.OnFailureListener;
 import com.google.android.gms.tasks.OnSuccessListener;
 import com.google.android.gms.tasks.Task;
+import com.google.maps.android.SphericalUtil;
 import com.karumi.dexter.Dexter;
 import com.karumi.dexter.PermissionToken;
 import com.karumi.dexter.listener.PermissionDeniedResponse;
@@ -66,6 +74,10 @@ import com.neshan.task1.BuildConfig;
 import com.neshan.task1.R;
 import com.neshan.task1.domain.model.Leg;
 import com.neshan.task1.domain.model.Step;
+import com.neshan.task1.domain.model.animate.BeginJourneyEvent;
+import com.neshan.task1.domain.model.animate.CurrentJourneyEvent;
+import com.neshan.task1.domain.model.animate.EndJourneyEvent;
+import com.neshan.task1.domain.model.animate.JourneyEventBus;
 import com.neshan.task1.domain.model.searchModel.ItemsItem;
 import com.neshan.task1.neshan.adapter.SearchAdapter;
 import com.neshan.task1.neshan.presentation.SearchRoutingViewModel;
@@ -87,6 +99,8 @@ import javax.inject.Inject;
 
 import dagger.android.support.DaggerAppCompatActivity;
 
+import static java.lang.Math.cos;
+import static java.lang.Math.sin;
 
 // create by miaad 1399/11/29
 public class MainActivity extends DaggerAppCompatActivity implements SearchAdapter.OnSearchItemListener {
@@ -116,6 +130,15 @@ public class MainActivity extends DaggerAppCompatActivity implements SearchAdapt
     protected SearchAdapter mAdapter;
     private ArrayList<ItemsItem> items = new ArrayList<>();
     private boolean searchOrMark = false;
+    private float cameraBearing;
+
+
+    private Handler handler;
+    private int index, next;
+    LatLng startPosition, endPosition;
+    private float v;
+    private double lat, lng;
+
     //---------------------------------------------------------------
     private static final String TAG = MainActivity.class.getName();
     final int REQUEST_CODE = 123;
@@ -156,7 +179,6 @@ public class MainActivity extends DaggerAppCompatActivity implements SearchAdapt
             points = new ArrayList<>();
             decodedStepByStepPath = new ArrayList<>();
 
-
             List<Leg> legs = object.getRoutes().get(0).getLegs();
             List<Step> steps = legs.get(0).getSteps();
             for (int S = 0; S < steps.size(); S++) {
@@ -164,7 +186,6 @@ public class MainActivity extends DaggerAppCompatActivity implements SearchAdapt
                 List<Point> mPoints = polylineDecoder.decode(steps.get(S).getPolyline());
                 points.addAll(mPoints);
             }
-
 
             for (int i = 0; i < points.size(); i++) {
                 decodedStepByStepPath.add(new LatLng(points.get(i).getLat(), points.get(i).getLng()));
@@ -176,14 +197,127 @@ public class MainActivity extends DaggerAppCompatActivity implements SearchAdapt
             onMapPolyline = new Polyline(decodedStepByStepPath, getLineStyle());
             map.addPolyline(onMapPolyline);
             map.moveCamera(mOriginLatlng, 0.75f);
-            map.setZoom(18 ,0.45f);
-            map.setBearing(0 ,0.45f);
-            map.setTilt(30f ,0.45f);
-//          mapSetPosition(overview);
+            map.setZoom(19, 0.45f);
+            Log.i("MIAAAD", String.valueOf(map.getBearing()));
+            map.setTilt(35f, 0.45f);
+            map.getSettings().setMaxZoomLevel(19);
+
+            double dLon = (mDesLatlng.getLongitude() - mOriginLatlng.getLongitude());
+            double y = sin(dLon) * cos(mDesLatlng.getLatitude());
+            double x = cos(mOriginLatlng.getLatitude()) * sin(mDesLatlng.getLatitude()) - sin(mOriginLatlng.getLatitude()) * cos(mDesLatlng.getLatitude()) * cos(dLon);
+            double brng = Math.toDegrees((Math.atan2(y, x)));
+            brng = (360 - ((brng + 360) % 360));
+
+
+            double desLat = decodedStepByStepPath.get(2).getLatitude();
+            double desLng = decodedStepByStepPath.get(2).getLongitude();
+            float bearing = (float) SphericalUtil.computeHeading(new com.google.android.gms.maps.model.LatLng(mOriginLatlng.getLatitude(), mOriginLatlng.getLongitude()), new com.google.android.gms.maps.model.LatLng(desLat, desLng));
+            map.setBearing(-bearing, 0.45f);
+
+            animateMarker();
 
             String markers = PolylineUtils.toMarkers(points);
             Log.i("MIAAD", markers);
         });
+    }
+
+    private void animateMarker() {
+        ValueAnimator polylineAnimator = ValueAnimator.ofInt(0, 100);
+        polylineAnimator.setDuration(2000);
+        polylineAnimator.setInterpolator(new LinearInterpolator());
+//        polylineAnimator.addUpdateListener(new ValueAnimator.AnimatorUpdateListener() {
+//            @Override
+//            public void onAnimationUpdate(ValueAnimator valueAnimator) {
+//                List<LatLng> points = decodedStepByStepPath;
+//                int percentValue = (int) valueAnimator.getAnimatedValue();
+//                int size = points.size();
+//                int newPoints = (int) (size * (percentValue / 100.0f));
+//                List<LatLng> p = points.subList(0, newPoints);
+//            }
+//        });
+//        polylineAnimator.start();
+        handler = new Handler();
+        index = -1;
+        next = 1;
+        handler.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                if (index < decodedStepByStepPath.size() - 1) {
+                    index++;
+                    next = index + 1;
+                }
+                if (index < decodedStepByStepPath.size() - 1) {
+                    startPosition = decodedStepByStepPath.get(index);
+                    endPosition = decodedStepByStepPath.get(next);
+                }
+                if (index == 0) {
+                    BeginJourneyEvent beginJourneyEvent = new BeginJourneyEvent();
+                    beginJourneyEvent.setBeginLatLng(startPosition);
+                    JourneyEventBus.getInstance().setOnJourneyBegin(beginJourneyEvent);
+                }
+                if (index == decodedStepByStepPath.size() - 1) {
+                    EndJourneyEvent endJourneyEvent = new EndJourneyEvent();
+                    endJourneyEvent.setEndJourneyLatLng(new LatLng(decodedStepByStepPath.get(index).getLatitude(),
+                            decodedStepByStepPath.get(index).getLongitude()));
+                    JourneyEventBus.getInstance().setOnJourneyEnd(endJourneyEvent);
+                }
+                ValueAnimator valueAnimator = ValueAnimator.ofFloat(0, 1);
+                valueAnimator.setDuration(3000);
+                valueAnimator.setInterpolator(new LinearInterpolator());
+                valueAnimator.addUpdateListener(new ValueAnimator.AnimatorUpdateListener() {
+                    @Override
+                    public void onAnimationUpdate(ValueAnimator valueAnimator) {
+                        v = valueAnimator.getAnimatedFraction();
+                        lng = v * endPosition.getLongitude() + (1 - v)
+                                * startPosition.getLongitude();
+                        lat = v * endPosition.getLatitude() + (1 - v)
+                                * startPosition.getLatitude();
+                        LatLng newPos = new LatLng(lat, lng);
+                        CurrentJourneyEvent currentJourneyEvent = new CurrentJourneyEvent();
+                        currentJourneyEvent.setCurrentLatLng(newPos);
+                        JourneyEventBus.getInstance().setOnJourneyUpdate(currentJourneyEvent);
+                        marker.setLatLng(newPos);
+                        map.moveCamera(newPos, 0f);
+                        float bearing = (float) SphericalUtil.computeHeading(new com.google.android.gms.maps.model.LatLng(startPosition.getLatitude(), startPosition.getLongitude()), new com.google.android.gms.maps.model.LatLng(endPosition.getLatitude(), endPosition.getLongitude()));
+                        Log.i("BEARING", bearing + "");
+                        if (bearing != 0.0)
+                            map.setBearing(-bearing, 0f);
+//                        map.setBearing((float) getBearing(startPosition.getLatitude() ,startPosition.getLongitude() ,endPosition.getLatitude() ,endPosition.getLongitude()), 0f);
+                    }
+                });
+                valueAnimator.start();
+                if (index != decodedStepByStepPath.size() - 1) {
+                    handler.postDelayed(this, 3000);
+                }
+            }
+        }, 3000);
+    }
+
+    private static double degreeToRadians(double latLong) {
+        return (Math.PI * latLong / 180.0);
+    }
+
+    private static double radiansToDegree(double latLong) {
+        return (latLong * 180.0 / Math.PI);
+    }
+
+    public static double getBearing(double lati1, double lngi1, double lati2, double lngi2) {
+
+        double fLat = degreeToRadians(lati1);
+        double fLong = degreeToRadians(lngi1);
+        double tLat = degreeToRadians(lati2);
+        double tLong = degreeToRadians(lngi2);
+
+        double dLon = (tLong - fLong);
+
+        double degree = radiansToDegree(Math.atan2(sin(dLon) * cos(tLat),
+                cos(fLat) * sin(tLat) - sin(fLat) * cos(tLat) * cos(dLon)));
+
+        if (degree >= 0) {
+            return degree;
+        } else {
+            return 360 + degree;
+        }
     }
 
     private void initView() {
@@ -196,14 +330,16 @@ public class MainActivity extends DaggerAppCompatActivity implements SearchAdapt
         initRecyclerView();
         navigate.setVisibility(View.GONE);
 
-        map.moveCamera(new LatLng(35.767234, 51.330743), 0);
+        map.moveCamera(new LatLng(34.377721, 47.138991), 0);
         map.setZoom(14, 0);
 
         map.setOnMapLongClickListener(latLng -> {
             map.removeMarker(marker);
-            map.addMarker(addUserMarker(latLng));
+            marker = addUserMarker(latLng);
+            map.addMarker(marker);
             markers.clear();
-            markers.add(addUserMarker(latLng));
+            marker = addUserMarker(latLng);
+            markers.add(marker);
             Handler handler = new Handler(Looper.getMainLooper());
             handler.post(new Runnable() {
                 public void run() {
@@ -221,9 +357,9 @@ public class MainActivity extends DaggerAppCompatActivity implements SearchAdapt
                 handler.post(new Runnable() {
                     public void run() {
                         if (originLatlng != null) {
-                            if (searchOrMark){
+                            if (searchOrMark) {
                                 getDataFromNetwork(originLatlng, mSearchDesLatlng.getLatitude() + "," + mSearchDesLatlng.getLongitude());
-                            }else {
+                            } else {
                                 getDataFromNetwork(originLatlng, mDesLatlng.getLatitude() + "," + mDesLatlng.getLongitude());
                             }
                         }
@@ -307,6 +443,7 @@ public class MainActivity extends DaggerAppCompatActivity implements SearchAdapt
                 super.onLocationResult(locationResult);
                 // location is received
                 userLocation = locationResult.getLastLocation();
+                float miaad = locationResult.getLocations().get(0).bearingTo(locationResult.getLocations().get(0));
                 lastUpdateTime = DateFormat.getTimeInstance().format(new Date());
 
                 onLocationChange();
@@ -443,7 +580,8 @@ public class MainActivity extends DaggerAppCompatActivity implements SearchAdapt
         if (userLocation != null) {
             if (marker != null)
                 map.removeMarker(marker);
-            map.addMarker(addUserMarker(new LatLng(userLocation.getLatitude(), userLocation.getLongitude())));
+            marker = addUserMarker(new LatLng(userLocation.getLatitude(), userLocation.getLongitude()));
+            map.addMarker(marker);
         }
     }
 
@@ -481,14 +619,34 @@ public class MainActivity extends DaggerAppCompatActivity implements SearchAdapt
         return styleCreator.buildStyle();
     }
 
+
+    public static Bitmap getBitmapFromVectorDrawable(Context context, int drawableId) {
+        Drawable drawable = ContextCompat.getDrawable(context, drawableId);
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) {
+            drawable = (DrawableCompat.wrap(drawable)).mutate();
+        }
+
+        Bitmap bitmap = Bitmap.createBitmap(drawable.getIntrinsicWidth(),
+                drawable.getIntrinsicHeight(), Bitmap.Config.ARGB_8888);
+        Canvas canvas = new Canvas(bitmap);
+        drawable.setBounds(0, 0, canvas.getWidth(), canvas.getHeight());
+        drawable.draw(canvas);
+
+        return bitmap;
+    }
+
     public void focusOnUserLocation(View view) {
         if (userLocation != null) {
             map.moveCamera(
                     new LatLng(userLocation.getLatitude(), userLocation.getLongitude()), 0.25f);
             map.setZoom(17, 0.25f);
             mOriginLatlng = new LatLng(userLocation.getLatitude(), userLocation.getLongitude());
-            map.addMarker(addUserMarker(new LatLng(userLocation.getLatitude(), userLocation.getLongitude())));
+            marker = addUserMarker(new LatLng(userLocation.getLatitude(), userLocation.getLongitude()));
+            map.addMarker(marker);
             originLatlng = userLocation.getLatitude() + "," + userLocation.getLongitude();
+//            float bearing = (float) SphericalUtil.computeHeading(new com.google.android.gms.maps.model.LatLng(mOriginLatlng.getLatitude(), mOriginLatlng.getLongitude()), new com.google.android.gms.maps.model.LatLng(34.37772135978459, 47.1389910338243));
+//            map.setBearing(-bearing, 0.45f);
+//            map.setTilt(45f, 0.45f);
         }
     }
 
@@ -506,50 +664,65 @@ public class MainActivity extends DaggerAppCompatActivity implements SearchAdapt
         return true;
     }
 
+//    private float getBearing(LatLng begin, LatLng end) {
+//        double lat = Math.abs(begin.getLatitude() - end.getLatitude());
+//        double lng = Math.abs(begin.getLongitude() - end.getLongitude());
+//
+//        if (begin.getLatitude() < end.getLatitude() && begin.getLongitude() < end.getLongitude())
+//            return (float) (Math.toDegrees(Math.atan(lng / lat)));
+//        else if (begin.getLatitude() >= end.getLatitude() && begin.getLatitude() < end.getLongitude())
+//            return (float) ((90 - Math.toDegrees(Math.atan(lng / lat))) + 90);
+//        else if (begin.getLatitude() >= end.getLatitude() && begin.getLongitude() >= end.getLongitude())
+//            return (float) (Math.toDegrees(Math.atan(lng / lat)) + 180);
+//        else if (begin.getLatitude() < end.getLatitude() && begin.getLongitude() >= end.getLongitude())
+//            return (float) ((90 - Math.toDegrees(Math.atan(lng / lat))) + 270);
+//        return -1;
+//    }
+
+    private double bearingBetweenLocations(LatLng latLng1, LatLng latLng2) {
+
+        double PI = 3.14159;
+        double lat1 = latLng1.getLatitude() * PI / 180;
+        double long1 = latLng1.getLongitude() * PI / 180;
+        double lat2 = latLng2.getLatitude() * PI / 180;
+        double long2 = latLng2.getLongitude() * PI / 180;
+
+        double dLon = (long2 - long1);
+
+        double y = Math.sin(dLon) * Math.cos(lat2);
+        double x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1)
+                * Math.cos(lat2) * Math.cos(dLon);
+
+        double brng = Math.atan2(y, x);
+
+        brng = Math.toDegrees(brng);
+        brng = (brng + 360) % 360;
+
+        return brng;
+    }
 
     private float getBearing(LatLng begin, LatLng end) {
-        double lat = Math.abs(begin.getLatitude() - end.getLatitude());
-        double lng = Math.abs(begin.getLongitude() - end.getLongitude());
-
-        if (begin.getLatitude() < end.getLatitude() && begin.getLongitude() < end.getLongitude())
-            return (float) (Math.toDegrees(Math.atan(lng / lat)));
-        else if (begin.getLatitude() >= end.getLatitude() && begin.getLatitude() < end.getLongitude())
-            return (float) ((90 - Math.toDegrees(Math.atan(lng / lat))) + 90);
-        else if (begin.getLatitude() >= end.getLatitude() && begin.getLongitude() >= end.getLongitude())
-            return (float) (Math.toDegrees(Math.atan(lng / lat)) + 180);
-        else if (begin.getLatitude() < end.getLatitude() && begin.getLongitude() >= end.getLongitude())
-            return (float) ((90 - Math.toDegrees(Math.atan(lng / lat))) + 270);
-        return -1;
+        double dLon = (end.getLongitude() - begin.getLongitude());
+        double x = Math.sin(Math.toRadians(dLon)) * Math.cos(Math.toRadians(end.getLatitude()));
+        double y = Math.cos(Math.toRadians(begin.getLatitude())) * Math.sin(Math.toRadians(end.getLatitude()))
+                - Math.sin(Math.toRadians(begin.getLatitude())) * Math.cos(Math.toRadians(end.getLatitude())) * Math.cos(Math.toRadians(dLon));
+        double bearing = Math.toDegrees((Math.atan2(x, y)));
+        return (float) bearing;
     }
 
-    private void mapSetPosition(boolean overview) {
-        double centerFirstMarkerX = markers.get(0).getLatLng().getLatitude();
-        double centerFirstMarkerY = markers.get(0).getLatLng().getLongitude();
-        if (overview) {
-            double centerFocalPositionX = (centerFirstMarkerX + markers.get(1).getLatLng().getLatitude()) / 2;
-            double centerFocalPositionY = (centerFirstMarkerY + markers.get(1).getLatLng().getLongitude()) / 2;
-            map.moveCamera(new LatLng(centerFocalPositionX, centerFocalPositionY), 0.5f);
-            map.setZoom(14, 0.5f);
-        } else {
-            map.moveCamera(new LatLng(centerFirstMarkerX, centerFirstMarkerY), 0.5f);
-            map.setZoom(18, 0.5f);
-        }
+    private static double computeRotation(float fraction, double start, double end) {
+        double normalizeEnd = end - start;
+        double normalizedEndAbs = (normalizeEnd + 360) % 360;
 
-    }
-
-    private static float computeRotation(float fraction, float start, float end) {
-        float normalizeEnd = end - start;
-        float normalizedEndAbs = (normalizeEnd + 360) % 360;
-
-        float direction = (normalizedEndAbs > 180) ? -1 : 1;
-        float rotation;
+        double direction = (normalizedEndAbs > 180) ? -1 : 1;
+        double rotation;
         if (direction > 0) {
             rotation = normalizedEndAbs;
         } else {
             rotation = normalizedEndAbs - 360;
         }
 
-        float result = fraction * rotation + start;
+        double result = fraction * rotation + start;
         return (result + 360) % 360;
     }
 

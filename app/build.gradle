@@ -64,6 +64,9 @@ dependencies {
     implementation 'com.google.android.gms:play-services-gcm:15.0.1'
     implementation 'com.google.android.gms:play-services-location:15.0.1'
 
+    implementation 'com.google.maps.android:android-maps-utils:0.5'
+    implementation 'com.google.android.gms:play-services-maps:15.0.1'
+
     // dexter runtime permissions
     implementation 'com.karumi:dexter:6.2.2'
 
